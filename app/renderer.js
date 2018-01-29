@@ -29,10 +29,10 @@ var stlGeom = null;
 var polyhedronMesh = null;
 var polyGeom = null;
 
-var slicerPlane = null;
+// var slicerPlane = null;
+var slicerEdges = null;
 var controls;
 
-var meshCurves = [];
 var showPlasticBox = false;
 var showPoly = true;
 var stlWireframe = false;
@@ -47,8 +47,9 @@ init();
 var slider = document.getElementById("slice-slider");
 slider.addEventListener("input", function(e) {
 
-    let val = .2*slider.value;
-    slicerPlane.position.z = val ;
+    let val = .1*slider.value;
+    // slicerPlane.position.z = val ;
+    slicerEdges.position.z = val;
 
     exports.sliceMesh(val);
     render();
@@ -65,6 +66,13 @@ document.getElementById('stl-open').addEventListener('click', _ => {
         var loader = new STLLoader();
 
         loader.load(fileNames[0], function (geometry) {
+
+            let vertCt = geometry.attributes.position.array.length;
+            let triCt = geometry.attributes.position.count;
+            // fill out some Stats
+            document.getElementById("stl-stats").style.visibility = "visible";
+            document.getElementById("stl-tri-ct").textContent=(vertCt/3).toLocaleString('en', {useGrouping:true});
+            document.getElementById("stl-pos-ct").textContent=vertCt.toLocaleString('en', {useGrouping:true});
 
             scene.remove(stlMesh);
 
@@ -131,8 +139,8 @@ exports.toggleShowPoly = function toggleShowPoly() {
 
 exports.sliceMesh = function sliceMesh (zpos) {
 
-  // first, turn on the slider
-  slider.style.visibility = 'visible';
+    // first, turn on the slider
+    slider.style.visibility = 'visible';
 
     var mesh = stlMesh ? stlMesh : polyhedronMesh;
     var geom = stlGeom ? stlGeom : polyGeom;
@@ -140,15 +148,18 @@ exports.sliceMesh = function sliceMesh (zpos) {
     var vertCt = pos.count;
     var triCt = vertCt / 3;
 
-    if (!slicerPlane) {
+    if (!slicerEdges) {
         var geometry = new THREE.PlaneGeometry( .2, .2, 2 );
-        var material = new THREE.MeshBasicMaterial( {color: 0xffff00, side: THREE.DoubleSide, transparent: true, opacity:.2} );
-        slicerPlane = new THREE.Mesh( geometry, material );
+        // var material = new THREE.MeshBasicMaterial( {color: 0xffff00, side: THREE.DoubleSide, transparent: true, opacity:.2} );
+        // slicerPlane = new THREE.Mesh( geometry, material );
+        var edges = new THREE.EdgesGeometry( geometry );
+        slicerEdges = new THREE.LineSegments( edges, new THREE.LineBasicMaterial( { color: 0xffff00 } ) );
+        scene.add( slicerEdges );
 
         // how to control position
-        slicerPlane.rotation.z += Math.PI/4;
-        slicerPlane.position.z += zpos;
-        scene.add( slicerPlane );
+        //slicerPlane.rotation.z += Math.PI/4;
+        //slicerPlane.position.z += zpos;
+        //scene.add( slicerPlane );
         render();
     }
 
@@ -169,10 +180,85 @@ exports.sliceMesh = function sliceMesh (zpos) {
         }
     }
 
+    // now we know the first isectTriCt*3 triangles are the ones intersecting this z
+    // make edges for each of those
+    // var arrayPtPairs = findPointsIntersectingPlane(zpos, isectTriCt*3, pos);
+    // var edgeMesh = makeEdgeCurve(arrayPtPairs);
+    //scene.add(edgeMesh);
+
     geom.attributes.position.needsUpdate = true;
     geom.setDrawRange(0, isectTriCt*3);
     render();
 
+}
+
+function makeEdgeCurve(array) {
+    var geometry = new THREE.BufferGeometry();
+    // create a simple square shape. We duplicate the top left and bottom right
+    // vertices because each vertex needs to appear once per triangle.
+    var vertices = new Float32Array( array );
+
+    // itemSize = 3 because there are 3 values (components) per vertex
+    //geometry.addAttribute( 'position', new THREE.BufferAttribute( vertices, 3 ) );
+     var material = new THREE.MeshBasicMaterial( { color: 0xff0000 } );
+     var mesh = new THREE.Mesh( geometry, material );
+
+    //var edges = new THREE.EdgesGeometry( geometry );
+    //var slicedEdges = new THREE.LineSegments( edges, new THREE.LineBasicMaterial( { color: 0xffff00 } ) );
+    scene.add( mesh );
+    return mesh;
+}
+
+function findPointsIntersectingPlane(zpos, posCt, posArray) {
+    let ret = []; // point3s, so each idx 0,1,2 is a vertex (edge end)
+
+    let array = posArray.array;
+    // each 9 elements of posArray is 3 verts, which is 1 triangle
+    for (let ipos = 0; ipos < posCt; ipos+=9) {
+        let v1 = [array[ipos], array[ipos+1], array[ipos+2]];
+        let v2 = [array[ipos+3], array[ipos+4], array[ipos+5]];
+        let v3 = [array[ipos+6], array[ipos+7], array[ipos+8]];
+
+        // we expect the z of one v to be on the other side of zpos from the other 2
+        let a1 = v1[2] - zpos;
+        let a2 = v2[2] - zpos;
+        let a3 = v3[2] - zpos;
+
+        if ((a1>0 && a2>0 && a3>0) || (a1<0 && a2<0 && a3<0)) {
+            console.log("ACK");
+            continue;
+        }
+
+        var loner = v1;
+        var sameSide0 = v2;
+        var sameSide1 = v3;
+        if (a1 * a2 > 0) {
+            loner = v3;
+            sameSide0 = v1;
+            sameSide1 = v2;
+        } else if (a1 * a3 > 0) {
+            loner = v2;
+            sameSide0 = v1;
+            sameSide1 = v3;
+        }
+
+        var pv0 = [sameSide0[0] - loner[0], sameSide0[1] - loner[1], sameSide0[2] - loner[2]];
+        var pv1 = [sameSide1[0] - loner[0], sameSide1[1] - loner[1], sameSide1[2] - loner[2]];
+
+        let eps = .0001;
+        if (sameSide0[2] - loner[2] < eps || sameSide1[2] - loner[2] < eps) {
+            continue;
+        }
+        var z0 = (zpos - loner[2])/(sameSide0[2] - loner[2]);
+        var z1 = (zpos - loner[2])/(sameSide1[2] - loner[2]);
+
+        pv0 = [z0*pv0[0] + loner[0], z0*pv0[1]+ loner[1], z0*pv0[2]+ loner[2]];
+        pv1 = [z1*pv1[0] + loner[0], z1*pv1[1]+ loner[1], z1*pv1[2] + loner[2]];
+
+        ret = ret.concat(pv0.concat(pv1));
+    }
+
+    return ret;
 }
 
 function swapTriangles(pts, idx0, idx1) {
@@ -188,6 +274,7 @@ function swapTriangles(pts, idx0, idx1) {
 
 // Avoid constantly rendering the scene by only
 // updating the controls every requestAnimationFrame
+// loop needed for orbit/trackball controls
 function animationLoop() {
 	requestAnimationFrame(animationLoop);
 	controls.update();
@@ -270,6 +357,8 @@ window.addEventListener( 'resize', function () {
 
 function init() {
 
+    document.getElementById("stl-stats").style.visibility = "hidden";
+
     scene = new THREE.Scene();
 
     camera = new THREE.PerspectiveCamera( 3, window.innerWidth / window.innerHeight, .1, 200 );
@@ -336,8 +425,9 @@ function init() {
 
 }
 
+// for orbit controls
 animationLoop();
 
 loader.load( '../collada/skp-simple-plastic-box/model.dae', loadPlasticBox);
 
-render();
+//render();
